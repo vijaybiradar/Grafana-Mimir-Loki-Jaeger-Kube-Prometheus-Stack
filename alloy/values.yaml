@@ -4,7 +4,7 @@ fullnameOverride: null
 
 global:
   image:
-    registry: ""  # Optional: set your image registry if needed
+    registry: ""
     pullSecrets: []
 
 # -- Manage CRDs for monitoring
@@ -14,20 +14,60 @@ crds:
 # -- Alloy-specific configuration
 alloy:
   configMap:
-    create: true  # Create a new ConfigMap
+    create: true  # Create a new ConfigMap for Prometheus scraping configuration
     content: |
+      # Scrape metrics from node-exporter
       prometheus.scrape "node_exporter" {
         targets = [{
-          __address__ = "node-exporter-prometheus-node-exporter.alloy.svc.cluster.local:9100"  # DNS of node-exporter service
+          __address__ = "node-exporter-prometheus-node-exporter.alloy.svc.cluster.local:9100"
         }]
         forward_to = [prometheus.remote_write.mimir.receiver]
         job_name   = "node_exporter"
       }
 
+      # Scrape metrics from kube-state-metrics
+      prometheus.scrape "kube-state-metrics" {
+        targets = [{
+          __address__ = "kube-state-metrics.kube-system.svc.cluster.local:8080"
+        }]
+        forward_to = [prometheus.remote_write.mimir.receiver]
+        job_name   = "kube-state-metrics"
+      }
+
+      # Scrape metrics from kubelet
+      prometheus.scrape "kubelet" {
+        targets = [{
+          __address__ = "kubelet.kube-system.svc.cluster.local:10250"
+        }]
+        forward_to = [prometheus.remote_write.mimir.receiver]
+        job_name   = "kubelet"
+      }
+
+      # Scrape metrics from Kubernetes API server
+      prometheus.scrape "apiserver" {
+        targets = [{
+          __address__ = "kubernetes.default.svc.cluster.local:443"
+        }]
+        forward_to = [prometheus.remote_write.mimir.receiver]
+        job_name   = "kubernetes-apiserver"
+      }
+
+      # Loki: Send logs to external Loki
+      loki.push "loki" {
+        endpoint = "http://loki-dev-loki-distributed-gateway.loki.svc.cluster.local/loki/api/v1/push"
+        labels   = { job = "kubernetes-logs" }
+      }
+
+      # Tempo: Send traces to external Tempo
+      tempo.push "tempo" {
+        endpoint = "http://tempo-dev-distributed-distributor.tempo-dev.svc:3200/api/traces"
+      }
+
+      # Remote write configuration to Mimir
       prometheus.remote_write "mimir" {
         endpoint {
           name = "mimir-distributor"
-          url  = "http://mimir-dev-nginx.mimir-dev.svc:80/api/v1/push"  # DNS of Mimir nginx
+          url  = "http://mimir-dev-nginx.mimir-dev.svc:80/api/v1/push"
 
           queue_config {
             capacity             = 5000
@@ -40,6 +80,7 @@ alloy:
           }
         }
       }
+
   clustering:
     enabled: false  # Disable clustering for now
     name: ""  # Optional: set a name if clustering is enabled
@@ -57,14 +98,14 @@ alloy:
   extraPorts: []
 
   mounts:
-    varlog: false
-    dockercontainers: false
+    varlog: true       # Enable access to log directory
+    dockercontainers: true  # Enable access to Docker container logs
     extra: []
 
   resources: {}  # Define resource limits/requests here if needed
 
 controller:
-  type: 'daemonset'  # Change to 'deployment' or 'statefulset' if needed
+  type: 'daemonset'  # DaemonSet to ensure one pod per node
   replicas: 1  # Ignored if using daemonset
 
   extraAnnotations: {}
